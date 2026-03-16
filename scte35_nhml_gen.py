@@ -210,13 +210,16 @@ def encode_segmentation_descriptor(event: SpliceEvent) -> bytes:
     body.write_bits(0x43554549, 32)  # identifier "CUEI"
     body.write_bits(seg.segmentation_event_id, 32)
     body.write_bits(0, 1)  # segmentation_event_cancel_indicator
-    body.write_bits(0, 1)  # segmentation_event_id_compliance_indicator
+    body.write_bits(1, 1)  # segmentation_event_id_compliance_indicator
     body.write_bits(0x3F, 6)  # reserved
 
     body.write_bits(1, 1)  # program_segmentation_flag
     body.write_bits(1 if has_duration else 0, 1)  # segmentation_duration_flag
-    body.write_bits(1, 1)  # delivery_not_restricted_flag
-    body.write_bits(0x1F, 5)  # reserved
+    body.write_bits(0, 1)  # delivery_not_restricted_flag
+    body.write_bits(0, 1)  # web_delivery_allowed_flag
+    body.write_bits(0, 1)  # no_regional_blackout_flag
+    body.write_bits(0, 1)  # archive_allowed_flag
+    body.write_bits(0x3, 2)  # device_restrictions (no restrictions)
 
     if has_duration:
         body.write_bits(seg.segmentation_duration_90khz & 0xFFFFFFFFFF, 40)
@@ -390,12 +393,11 @@ def parse_schedule(data: dict) -> list[SpliceEvent]:
         if command not in ("splice_insert", "time_signal"):
             raise ValueError(f"Event {i}: unknown command {command!r}")
 
-        splice_event_id = raw.get("splice_event_id", next_id)
-        next_id = splice_event_id + 1
-
         duration_90khz = None
         if "duration" in raw:
             duration_90khz = parse_duration_field(raw["duration"])
+
+        explicit_splice_event_id = raw.get("splice_event_id")
 
         seg_info = None
         raw_seg = raw.get("segmentation")
@@ -404,8 +406,9 @@ def parse_schedule(data: dict) -> list[SpliceEvent]:
             if "segmentation_duration" in raw_seg:
                 seg_dur = parse_duration_field(raw_seg["segmentation_duration"])
 
+            seg_eid_fallback = explicit_splice_event_id if explicit_splice_event_id is not None else next_id
             seg_info = SegmentationInfo(
-                segmentation_event_id=raw_seg.get("segmentation_event_id", splice_event_id),
+                segmentation_event_id=raw_seg.get("segmentation_event_id", seg_eid_fallback),
                 segmentation_type_id=raw_seg.get("segmentation_type_id"),
                 segmentation_duration_90khz=seg_dur,
                 upid_type=raw_seg.get("upid_type", 0),
@@ -417,6 +420,14 @@ def parse_schedule(data: dict) -> list[SpliceEvent]:
                 f"(SCTE-35 §9.3 requires segmentation_descriptor)",
                 file=sys.stderr,
             )
+
+        if explicit_splice_event_id is not None:
+            splice_event_id = explicit_splice_event_id
+        elif seg_info is not None:
+            splice_event_id = seg_info.segmentation_event_id
+        else:
+            splice_event_id = next_id
+        next_id = splice_event_id + 1
 
         pre_roll_90khz = global_pre_roll_90khz
         if "pre_roll" in raw:
@@ -1035,6 +1046,8 @@ def cmd_validate(args: argparse.Namespace) -> None:
                 if seg_type is not None:
                     seg_name = SEGMENTATION_TYPE_NAMES.get(seg_type, "Unknown")
                     seg_str = f", {seg_name} (0x{seg_type:02X})"
+                if ev.segmentation.upid:
+                    seg_str += f", upid={ev.segmentation.upid}"
             pre_roll_str = ""
             if ev.pre_roll_90khz > 0:
                 pre_roll_str = f", pre_roll={ev.pre_roll_90khz / 90000 * 1000:.0f}ms"

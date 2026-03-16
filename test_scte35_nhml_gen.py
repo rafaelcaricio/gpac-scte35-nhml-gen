@@ -1201,17 +1201,14 @@ class TestEndToEnd:
         root = ET.fromstring(nhml)
 
         all_samples = root.findall("NHNTSample")
-        # After ProgramEnd at 10s, ProgramStart should not be active
+        # After ProgramEnd at 10s, ProgramStart should be deactivated.
+        # POEnd (from t=6s) and ProgramEnd remain active = 2 emibs.
         for s in all_samples:
             dts = int(s.get("DTS"))
             if dts >= 900000:  # 10s in 90kHz
-                emib_ids = [
-                    int(e.get("event_id"))
-                    for e in s.findall("EventMessageInstanceBox")
-                ]
-                # splice_event_id=1 is ProgramStart — should not be present
-                assert 1 not in emib_ids, (
-                    f"ProgramStart still active at DTS={dts} after ProgramEnd"
+                emibs = s.findall("EventMessageInstanceBox")
+                assert len(emibs) == 2, (
+                    f"Expected 2 emibs (POEnd + ProgramEnd) at DTS={dts}, got {len(emibs)}"
                 )
 
     def test_spec_example_two_overlapping(self):
